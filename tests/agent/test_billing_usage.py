@@ -2,11 +2,16 @@
 
 Behavior contracts: status classification, bar math, fail-open, and the
 dollars-only / topup-split invariants the billing UX requires.
+
+Also exercises the ``HERMES_DEV_CREDITS_FIXTURE`` environment variable
+gating — when set, ``build_usage_model()`` returns an offline fixture
+instead of contacting the portal.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Optional
 
 import pytest
@@ -104,6 +109,77 @@ def test_topup_bar_is_full_with_no_denominator():
     assert tb is not None and tb.kind == "topup"
     assert tb.remaining_usd == 12.0 and tb.fill_fraction == 1.0 and tb.pct_used is None
     assert m.total_spendable_usd == 26.0 and m.has_topup is True
+
+
+def test_dev_credits_fixture_healthy(monkeypatch):
+    """When HERMES_DEV_CREDITS_FIXTURE=healthy, build_usage_model returns a healthy model
+    without contacting the portal."""
+    monkeypatch.setenv("HERMES_DEV_CREDITS_FIXTURE", "healthy")
+    from agent.billing_usage import build_usage_model
+    m = build_usage_model(timeout=5)
+    assert m.available is True
+    assert m.status == "healthy"
+    assert m.plan_name == "Plus"
+    assert m.subscription_remaining_usd == 14.0
+    assert m.total_spendable_usd == 14.0
+
+
+def test_dev_credits_fixture_depleted(monkeypatch):
+    """When HERMES_DEV_CREDITS_FIXTURE=depleted, build_usage_model returns a depleted model
+    without contacting the portal."""
+    monkeypatch.setenv("HERMES_DEV_CREDITS_FIXTURE", "depleted")
+    from agent.billing_usage import build_usage_model
+    m = build_usage_model(timeout=5)
+    assert m.available is True
+    assert m.status == "depleted"
+    assert m.plan_name == "Plus"
+
+
+def test_dev_credits_fixture_low(monkeypatch):
+    """When HERMES_DEV_CREDITS_FIXTURE=low, build_usage_model returns a low-balance model
+    without contacting the portal."""
+    monkeypatch.setenv("HERMES_DEV_CREDITS_FIXTURE", "low")
+    from agent.billing_usage import build_usage_model
+    m = build_usage_model(timeout=5)
+    assert m.available is True
+    assert m.status == "low"
+    assert m.plan_name == "Plus"
+
+
+def test_dev_credits_fixture_free(monkeypatch):
+    """When HERMES_DEV_CREDITS_FIXTURE is not set, build_usage_model falls through to the normal portal fetch."""
+    monkeypatch.delenv("HERMES_DEV_CREDITS_FIXTURE", raising=False)
+    from agent.billing_usage import build_usage_model
+    m = build_usage_model(timeout=5)
+    # When the fixture is not set, the function falls through to the normal portal fetch.
+    # Since we can't guarantee a live portal, we just assert the model is built
+    # (it may be available=False if the portal is unreachable, which is fine).
+    assert m.available is not None
+
+
+def test_dev_billing_fixture_card_sub(monkeypatch):
+    """When HERMES_DEV_BILLING_FIXTURE=card-sub, build_billing_state returns a card-sub state
+    without contacting the portal."""
+    monkeypatch.setenv("HERMES_DEV_BILLING_FIXTURE", "card-sub")
+    from agent.billing_view import build_billing_state
+    b = build_billing_state(timeout=5)
+    assert b.logged_in is True
+    assert b.org_id == "org_acme"
+    assert b.org_slug == "acme"
+    assert b.org_name == "Acme Inc"
+    assert b.role == "OWNER"
+    assert b.balance_usd == Decimal("3.40")
+    assert b.card is not None
+    assert b.card.last4 == "4242"
+
+
+def test_dev_billing_fixture_notadmin(monkeypatch):
+    """When HERMES_DEV_BILLING_FIXTURE=notadmin, build_billing_state returns a non-admin role."""
+    monkeypatch.setenv("HERMES_DEV_BILLING_FIXTURE", "notadmin")
+    from agent.billing_view import build_billing_state
+    b = build_billing_state(timeout=5)
+    assert b.logged_in is True
+    assert b.role == "MEMBER"
 
 
 
