@@ -289,12 +289,104 @@ def reset_nous_portal_account_info_cache() -> None:
     _account_info_cache = None
 
 
+# ── Dev account fixture (HERMES_DEV_ACCOUNT_FIXTURE) ─────────────────────────
+# The whole entitlement / feature-gating layer reads this module's
+# get_nous_portal_account_info; a fixture here makes features, managed-tool
+# gating and /usage offline-testable with no portal account. Same invariants as
+# the agent/ fixture layer (agent/dev_fixtures.py): gate on HERMES_DEV=1, and
+# an unknown name fails closed to an error info — never a live portal call.
+
+_DEV_ACCOUNT_PORTAL = "https://portal.nousresearch.com"
+
+
+def _dev_account(**over: Any) -> NousPortalAccountInfo:
+    """Fixture account base (Acme Inc org, portal origin) + per-state overrides."""
+    base = dict(
+        logged_in=True, source="dev-fixture", fresh=True,
+        user_id="dev_user", org_id="org_acme", org_slug="acme", org_name="Acme Inc",
+        portal_base_url=_DEV_ACCOUNT_PORTAL,
+    )
+    return NousPortalAccountInfo(**{**base, **over})
+
+
+_DEV_POOL_COVERAGE = {
+    "firecrawl": True, "fal": True, "fal-video": False,
+    "openai-audio": True, "browser-use": True, "modal": True,
+}
+
+_DEV_ACCOUNT_FIXTURES: dict[str, NousPortalAccountInfo] = {
+    # Subscribed paid account: entitled to every managed-tool category.
+    "paid": _dev_account(
+        paid_service_access=True,
+        paid_service_access_info=NousPaidServiceAccessInfo(
+            allowed=True, paid_access=True, reason="usable_credits", organisation_id="org_acme",
+            has_active_subscription=True, active_subscription_is_paid=True,
+            subscription_tier=1, subscription_monthly_charge=20.0,
+            subscription_credits_remaining=14.0, purchased_credits_remaining=0.0,
+            total_usable_credits=14.0,
+        ),
+        subscription=NousPortalSubscriptionInfo(
+            plan="Plus", tier=1, monthly_charge=20.0, monthly_credits=20.0,
+            current_period_end="2099-01-01", credits_remaining=14.0,
+        ),
+        tool_access=NousToolAccessInfo(enabled=True, coverage={c: True for c in TOOL_COVERAGE_CATEGORIES}),
+        managed_tools=True,
+    ),
+    # $0 account with a live free tool pool: funded categories only (no video).
+    "pool": _dev_account(
+        paid_service_access=False,
+        paid_service_access_info=NousPaidServiceAccessInfo(
+            allowed=False, paid_access=False, reason="free_tool_pool", organisation_id="org_acme",
+            has_active_subscription=False, active_subscription_is_paid=False,
+            subscription_credits_remaining=0.0, purchased_credits_remaining=0.0,
+            total_usable_credits=0.0,
+        ),
+        tool_access=NousToolAccessInfo(enabled=True, coverage=_DEV_POOL_COVERAGE),
+        managed_tools=True,
+    ),
+    # Named account on a free plan: no paid access, no tool pool.
+    "free": _dev_account(paid_service_access=False),
+    # Anonymous free tier (no Nous account behind it).
+    "anon": _dev_account(account_tier="anonymous", paid_service_access=False),
+    "logged-out": NousPortalAccountInfo(logged_in=False, source="dev-fixture", fresh=True),
+    "error": NousPortalAccountInfo(logged_in=False, source="error", fresh=True, error="dev account fixture error"),
+}
+
+
+def _dev_fixture_account_info() -> Optional[NousPortalAccountInfo]:
+    """``HERMES_DEV_ACCOUNT_FIXTURE`` (``paid | pool | free | anon | logged-out | error``) -> fixture
+    account, or None when no fixture is active. Prod-leak guard: activates ONLY under ``HERMES_DEV=1``.
+    An unknown name FAILS CLOSED to an error info (with a warning) — never a live portal call."""
+    from agent.dev_fixtures import log_unknown_fixture, read_fixture_env
+    name = read_fixture_env("HERMES_DEV_ACCOUNT_FIXTURE")
+    if name is None:
+        return None
+    name = name.lower()
+    if name in ("logged_out", "loggedout"):
+        name = "logged-out"
+    account = _DEV_ACCOUNT_FIXTURES.get(name)
+    if account is None:
+        log_unknown_fixture("HERMES_DEV_ACCOUNT_FIXTURE", name)
+        return NousPortalAccountInfo(
+            logged_in=False, source="error", fresh=True,
+            error=f"unknown HERMES_DEV_ACCOUNT_FIXTURE: {name}",
+        )
+    return account
+
+
 def get_nous_portal_account_info(*, force_fresh: bool = False, min_jwt_ttl_seconds: int = 60) -> NousPortalAccountInfo:
     """Normalized Nous Portal account entitlement.
 
     A valid unexpired OAuth JWT serves as a local snapshot (UX gating only; the server stays
     authoritative). ``force_fresh=True`` always calls ``/api/oauth/account`` and bypasses the cache.
+    A ``HERMES_DEV_ACCOUNT_FIXTURE`` short-circuits before any auth-store or network work.
     """
+    try:
+        fixture = _dev_fixture_account_info()
+    except Exception:
+        fixture = None
+    if fixture is not None:
+        return fixture
     try:
         from hermes_cli.auth import get_provider_auth_state
 

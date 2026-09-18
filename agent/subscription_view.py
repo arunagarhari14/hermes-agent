@@ -10,7 +10,6 @@ for an upgrade that needs 3DS / was declined. A 404 from NAS takes the fail-open
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Optional
@@ -243,7 +242,6 @@ def is_upgrade(state: SubscriptionState, tier_id: str) -> bool:
 
 # ── Dev fixtures (env-var driven, no live portal) ────────────────────────────
 
-_DEV_FIXTURE_PORTAL = "https://portal.nousresearch.com/billing"
 _DEV_TIER_SPECS = (("free", "Free", 0, "0", "0"), ("plus", "Plus", 1, "20", "1000"),
                    ("super", "Super", 2, "40", "3000"), ("ultra", "Ultra", 3, "80", "7000"))
 _DEV_FIXTURE_ALIASES = {"logged_out": "logged-out", "loggedout": "logged-out", "mid-tier": "mid",
@@ -273,15 +271,19 @@ def _dev_plan(tier_id: str, remaining: str, **over: Any) -> dict[str, Any]:
 
 def dev_fixture_subscription_state() -> Optional[SubscriptionState]:
     """``HERMES_DEV_SUBSCRIPTION_FIXTURE`` (``free | mid | top | not-admin | downgrade | cancel | team |
-    logged-out``) -> fixture state; None when unset; unknown name → logged-out with ``error`` set."""
-    name = (os.getenv("HERMES_DEV_SUBSCRIPTION_FIXTURE") or "").strip().lower()
-    if not name:
+    logged-out``) -> fixture state; None when unset. Prod-leak guard: activates ONLY under
+    ``HERMES_DEV=1``. An unknown name → logged-out with ``error`` set (never a live portal call)."""
+    from agent.dev_fixtures import DEV_ORG, DEV_PORTAL_URL, read_fixture_env
+    name = read_fixture_env("HERMES_DEV_SUBSCRIPTION_FIXTURE")
+    if name is None:
         return None
+    name = name.lower()
     name = _DEV_FIXTURE_ALIASES.get(name, name)
     if name == "logged-out":
         return SubscriptionState(logged_in=False)
 
-    common = dict(logged_in=True, org_name="Acme Inc", org_id="org_acme", role="OWNER", portal_url=_DEV_FIXTURE_PORTAL)
+    # SubscriptionState carries org_name/org_id only (no org_slug) — pick the shared org fields.
+    common = dict(logged_in=True, org_id=DEV_ORG["org_id"], org_name=DEV_ORG["org_name"], role="OWNER", portal_url=DEV_PORTAL_URL)
     states: dict[str, dict[str, Any]] = {
         "free": dict(current=None, tiers=_dev_tiers(None)),
         "mid": _dev_plan("plus", "420"),

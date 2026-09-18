@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import logging
 import math
-import os
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -184,8 +183,17 @@ def _plan_bar(remaining: float, spent: float) -> UsageBar:
 
 
 def _dev_fixture_usage_model() -> Optional[UsageModel]:
-    """``HERMES_DEV_CREDITS_FIXTURE`` -> fixture model (``free|healthy|low|topup|depleted``), else None."""
-    name = (os.getenv("HERMES_DEV_CREDITS_FIXTURE") or "").strip().lower()
+    """``HERMES_DEV_CREDITS_FIXTURE`` -> fixture model (``free|healthy|low|topup|depleted``), else None.
+
+    Prod-leak guard: applies ONLY under ``HERMES_DEV=1`` or ``HERMES_DEV_CREDITS``. An unknown
+    name FAILS CLOSED to ``available=False`` (with a warning) — it never falls through to the
+    portal a developer believes is bypassed.
+    """
+    from agent.dev_fixtures import log_unknown_fixture, read_fixture_env
+    name = read_fixture_env("HERMES_DEV_CREDITS_FIXTURE", "HERMES_DEV_CREDITS")
+    if name is None:
+        return None
+    name = name.lower()
     name = {"mid": "healthy", "top-up": "topup"}.get(name, name)
     plus = dict(available=True, plan_name="Plus", renews_at="2026-07-01")
     specs: dict[str, dict] = {
@@ -200,4 +208,7 @@ def _dev_fixture_usage_model() -> Optional[UsageModel]:
         "depleted": dict(**plus, status="depleted", subscription_remaining_usd=0.0, total_spendable_usd=0.0, plan_bar=_plan_bar(0.0, 20.0)),
     }
     spec = specs.get(name)
-    return UsageModel(**spec) if spec else None
+    if spec is None:
+        log_unknown_fixture("HERMES_DEV_CREDITS_FIXTURE", name)
+        return UsageModel(available=False)
+    return UsageModel(**spec)

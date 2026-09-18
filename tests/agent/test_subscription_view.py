@@ -231,6 +231,7 @@ def test_no_fixture_when_env_unset(monkeypatch):
 
 def test_dev_fixture_exposes_tier_catalog(monkeypatch):
     # A picker needs a catalog: the mid fixture lists tiers with the active one flagged.
+    monkeypatch.setenv("HERMES_DEV", "1")
     monkeypatch.setenv("HERMES_DEV_SUBSCRIPTION_FIXTURE", "mid")
     s = dev_fixture_subscription_state()
     assert s is not None and len(s.tiers) >= 2
@@ -242,6 +243,7 @@ def test_dev_fixture_exposes_tier_catalog(monkeypatch):
 
 def test_build_subscription_state_uses_fixture(monkeypatch):
     # build_subscription_state must short-circuit to the fixture (no portal call).
+    monkeypatch.setenv("HERMES_DEV", "1")
     monkeypatch.setenv("HERMES_DEV_SUBSCRIPTION_FIXTURE", "mid")
     s = build_subscription_state()
     assert s.logged_in is True
@@ -250,3 +252,18 @@ def test_build_subscription_state_uses_fixture(monkeypatch):
     url = subscription_manage_url(s)
     assert url is not None
     assert url.endswith("/manage-subscription?org_id=org_acme")
+
+
+def test_subscription_fixture_requires_dev_gate(monkeypatch):
+    """A stray HERMES_DEV_SUBSCRIPTION_FIXTURE with no HERMES_DEV must not fabricate state."""
+    monkeypatch.setenv("HERMES_DEV_SUBSCRIPTION_FIXTURE", "mid")
+    assert dev_fixture_subscription_state() is None
+
+
+def test_subscription_fixture_unknown_name_fails_closed(monkeypatch):
+    """An unknown fixture name yields logged_out + a visible error, never a live portal call."""
+    monkeypatch.setenv("HERMES_DEV", "1")
+    monkeypatch.setenv("HERMES_DEV_SUBSCRIPTION_FIXTURE", "not-a-real-state")
+    s = build_subscription_state()
+    assert s.logged_in is False
+    assert "unknown HERMES_DEV_SUBSCRIPTION_FIXTURE" in (s.error or "")

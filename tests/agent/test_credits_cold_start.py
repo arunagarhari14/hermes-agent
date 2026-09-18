@@ -70,6 +70,55 @@ def test_dev_fixtures_drive_cold_start():
             os.environ.pop("HERMES_DEV_CREDITS", None)
 
 
+def test_dev_fixture_activates_under_master_switch():
+    """HERMES_DEV=1 (the master switch) alone activates the credits fixture."""
+    import os
+
+    from agent.credits_tracker import dev_fixture_credits_state
+
+    os.environ["HERMES_DEV"] = "1"
+    os.environ["HERMES_DEV_CREDITS_FIXTURE"] = "depleted"
+    try:
+        fx = dev_fixture_credits_state()
+        assert fx is not None and fx.paid_access is False
+    finally:
+        os.environ.pop("HERMES_DEV_CREDITS_FIXTURE", None)
+        os.environ.pop("HERMES_DEV", None)
+
+
+def test_dev_fixture_unknown_name_fails_closed():
+    """An unknown fixture name must never fall through to the live header parser: the reader
+    returns an inert state (all-zero balance, no notices), never None."""
+    import os
+
+    from agent.credits_tracker import dev_fixture_credits_state
+
+    os.environ["HERMES_DEV"] = "1"
+    os.environ["HERMES_DEV_CREDITS_FIXTURE"] = "not-a-real-state"
+    try:
+        fx = dev_fixture_credits_state()
+        assert fx is not None
+        assert fx.remaining_micros == 0 and fx.paid_access is True  # fabricates nothing
+        assert "unknown HERMES_DEV_CREDITS_FIXTURE" in (fx.disabled_reason or "")
+        assert _cold_start_notices(fx) == []  # no depletion / usage notice
+    finally:
+        os.environ.pop("HERMES_DEV_CREDITS_FIXTURE", None)
+        os.environ.pop("HERMES_DEV", None)
+
+
+def test_dev_fixture_inert_without_gate():
+    """A stray fixture var with no dev gate is inert — None, so the real path runs."""
+    import os
+
+    from agent.credits_tracker import dev_fixture_credits_state
+
+    os.environ["HERMES_DEV_CREDITS_FIXTURE"] = "depleted"
+    try:
+        assert dev_fixture_credits_state() is None
+    finally:
+        os.environ.pop("HERMES_DEV_CREDITS_FIXTURE", None)
+
+
 # ── seed_credits_at_session_start: the shared session-open hydrator ───────────
 
 

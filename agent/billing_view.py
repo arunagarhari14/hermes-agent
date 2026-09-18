@@ -11,7 +11,6 @@ We keep them as :class:`decimal.Decimal` end-to-end and only format for display.
 from __future__ import annotations
 
 import logging
-import os
 import uuid
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
@@ -303,21 +302,25 @@ _FIXTURE_ALIASES = {
 def _dev_fixture_billing_state() -> Optional[BillingState]:
     """``HERMES_DEV_BILLING_FIXTURE`` -> :class:`BillingState` for offline UX; None when unset.
 
-    Names: nocard · card · card-sub · card-autoreload · notadmin · billing-off · logged-out; an
-    unknown name yields logged-out with ``error`` so the misconfiguration is visible.
+    Prod-leak guard: activates ONLY under ``HERMES_DEV=1``, so a stray fixture env var never
+    renders fabricated billing data outside local development. Names: nocard · card · card-sub ·
+    card-autoreload · notadmin · billing-off · logged-out; an unknown name yields logged-out with
+    ``error`` so the misconfiguration is visible (never a live portal call).
     """
-    name = (os.getenv("HERMES_DEV_BILLING_FIXTURE") or "").strip().lower()
-    if not name:
+    from agent.dev_fixtures import DEV_ORG, DEV_PORTAL_URL, read_fixture_env
+    name = read_fixture_env("HERMES_DEV_BILLING_FIXTURE")
+    if name is None:
         return None
+    name = name.lower()
     name = _FIXTURE_ALIASES.get(name, name)
     if name == "logged-out":
         return BillingState(logged_in=False)
 
-    # Prod portal host (matches subscription_view._DEV_FIXTURE_PORTAL) + the /topup deep-link suffix.
+    # Prod portal host (matches subscription_view) + the /topup deep-link suffix.
     common: dict[str, Any] = dict(
-        logged_in=True, org_id="org_acme", org_slug="acme", org_name="Acme Inc", role="OWNER",
+        logged_in=True, **DEV_ORG, role="OWNER",
         balance_usd=Decimal("3.40"), cli_billing_enabled=True, min_usd=Decimal("5"), max_usd=Decimal("500"),
-        charge_presets=(Decimal("10"), Decimal("25"), Decimal("50")), portal_url="https://portal.nousresearch.com/billing?topup=open",
+        charge_presets=(Decimal("10"), Decimal("25"), Decimal("50")), portal_url=f"{DEV_PORTAL_URL}?topup=open",
     )
     card = CardInfo(brand="Visa", last4="4242")
     overrides: dict[str, dict[str, Any]] = {

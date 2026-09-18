@@ -301,6 +301,14 @@ _HERMES_BEHAVIORAL_VARS = frozenset({
     "HERMES_MANAGED",
     "HERMES_MANAGED_DIR",
     "HERMES_DEV",
+    # Local-development fixtures (agent/dev_fixtures.py + hermes_cli/nous_account.py):
+    # a developer's exported HERMES_DEV_* env vars would otherwise fabricate
+    # account/credits/billing state in tests that assume the live fail-open path.
+    "HERMES_DEV_CREDITS",
+    "HERMES_DEV_CREDITS_FIXTURE",
+    "HERMES_DEV_BILLING_FIXTURE",
+    "HERMES_DEV_SUBSCRIPTION_FIXTURE",
+    "HERMES_DEV_ACCOUNT_FIXTURE",
     "HERMES_CONTAINER",
     "HERMES_EPHEMERAL_SYSTEM_PROMPT",
     "HERMES_TIMEZONE",

@@ -579,3 +579,58 @@ def test_has_agent_browser_import_failure_and_no_binary_is_false(monkeypatch):
     _block_legacy_agent_browser_checks(monkeypatch)
 
     assert ns._has_agent_browser() is False
+
+
+# ── offline feature gating via HERMES_DEV_ACCOUNT_FIXTURE ────────────────────
+# No monkeypatch of get_nous_portal_account_info: the fixture env var drives the
+# whole entitlement layer offline (gate = HERMES_DEV=1).
+
+
+def _offline_feature_env(monkeypatch, account: str):
+    """Activate the dev account fixture + local-only probes for a feature run."""
+    monkeypatch.setenv("HERMES_DEV", "1")
+    monkeypatch.setenv("HERMES_DEV_ACCOUNT_FIXTURE", account)
+    # Managed-gateway readiness needs a bearer token probe; supply a dev token.
+    monkeypatch.setenv("TOOL_GATEWAY_USER_TOKEN", "dev-token")
+    monkeypatch.setattr(ns, "get_env_value", lambda name: "")
+    monkeypatch.setattr(ns, "_toolset_enabled", lambda config, key: True)
+    monkeypatch.setattr(ns, "_has_agent_browser", lambda: False)
+    monkeypatch.setattr(ns, "resolve_openai_audio_api_key", lambda: "")
+    monkeypatch.setattr(ns, "has_direct_modal_credentials", lambda: False)
+
+
+def test_offline_feature_gating_paid_account_is_managed(monkeypatch):
+    """A paid account fixture lights the managed Tool Gateway features offline."""
+    _offline_feature_env(monkeypatch, "paid")
+
+    features = ns.get_nous_subscription_features({"model": {"provider": "nous"}})
+
+    assert features.nous_auth_present is True
+    assert features.subscribed is True
+    assert features.image_gen.managed_by_nous is True
+    assert features.web.available is True
+    assert features.video_gen.managed_by_nous is True  # paid funds video too
+
+
+def test_offline_feature_gating_pool_account_is_pool_limited(monkeypatch):
+    """A free-tool-pool fixture funds image/web but never video."""
+    _offline_feature_env(monkeypatch, "pool")
+
+    features = ns.get_nous_subscription_features({"model": {"provider": "nous"}})
+
+    assert features.subscribed is True
+    assert features.image_gen.managed_by_nous is True
+    assert features.video_gen.managed_by_nous is False
+    assert features.video_gen.available is False
+
+
+def test_offline_feature_gating_free_account_has_no_managed_access(monkeypatch):
+    """A free (no paid, no pool) account fixture yields no managed gateway features."""
+    _offline_feature_env(monkeypatch, "free")
+
+    features = ns.get_nous_subscription_features({"model": {"provider": "nous"}})
+
+    assert features.nous_auth_present is True
+    assert features.image_gen.available is False
+    assert features.image_gen.managed_by_nous is False
+    assert features.web.available is False

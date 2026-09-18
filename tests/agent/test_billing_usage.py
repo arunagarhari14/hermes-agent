@@ -11,7 +11,6 @@ instead of contacting the portal.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal
 from typing import Optional
 
 import pytest
@@ -114,6 +113,7 @@ def test_topup_bar_is_full_with_no_denominator():
 def test_dev_credits_fixture_healthy(monkeypatch):
     """When HERMES_DEV_CREDITS_FIXTURE=healthy, build_usage_model returns a healthy model
     without contacting the portal."""
+    monkeypatch.setenv("HERMES_DEV", "1")
     monkeypatch.setenv("HERMES_DEV_CREDITS_FIXTURE", "healthy")
     from agent.billing_usage import build_usage_model
     m = build_usage_model(timeout=5)
@@ -127,6 +127,7 @@ def test_dev_credits_fixture_healthy(monkeypatch):
 def test_dev_credits_fixture_depleted(monkeypatch):
     """When HERMES_DEV_CREDITS_FIXTURE=depleted, build_usage_model returns a depleted model
     without contacting the portal."""
+    monkeypatch.setenv("HERMES_DEV", "1")
     monkeypatch.setenv("HERMES_DEV_CREDITS_FIXTURE", "depleted")
     from agent.billing_usage import build_usage_model
     m = build_usage_model(timeout=5)
@@ -138,6 +139,7 @@ def test_dev_credits_fixture_depleted(monkeypatch):
 def test_dev_credits_fixture_low(monkeypatch):
     """When HERMES_DEV_CREDITS_FIXTURE=low, build_usage_model returns a low-balance model
     without contacting the portal."""
+    monkeypatch.setenv("HERMES_DEV", "1")
     monkeypatch.setenv("HERMES_DEV_CREDITS_FIXTURE", "low")
     from agent.billing_usage import build_usage_model
     m = build_usage_model(timeout=5)
@@ -146,40 +148,54 @@ def test_dev_credits_fixture_low(monkeypatch):
     assert m.plan_name == "Plus"
 
 
-def test_dev_credits_fixture_free(monkeypatch):
-    """When HERMES_DEV_CREDITS_FIXTURE is not set, build_usage_model falls through to the normal portal fetch."""
+def test_dev_credits_fixture_inert_without_gate(monkeypatch):
+    """A stray HERMES_DEV_CREDITS_FIXTURE with no dev gate must NOT activate: the model
+    falls through to the real (logged-out) path instead of fabricating a balance."""
+    import agent.billing_usage as bu
+
+    monkeypatch.setenv("HERMES_DEV_CREDITS_FIXTURE", "healthy")
+    monkeypatch.delenv("HERMES_DEV", raising=False)
+    monkeypatch.delenv("HERMES_DEV_CREDITS", raising=False)
+    monkeypatch.setattr(bu, "nous_logged_in", lambda: False)
+    monkeypatch.setattr(bu, "fetch_nous_account", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("portal contacted")))
+    m = bu.build_usage_model(timeout=5)
+    # Not the healthy fixture (that would be available=True); the logged-out fail-open state.
+    assert m.available is False
+
+
+def test_dev_credits_fixture_unset_falls_through_to_real_path(monkeypatch):
+    """With the fixture var unset, build_usage_model uses the real (logged-out) path."""
+    import agent.billing_usage as bu
+
     monkeypatch.delenv("HERMES_DEV_CREDITS_FIXTURE", raising=False)
+    monkeypatch.setattr(bu, "nous_logged_in", lambda: False)
+    m = bu.build_usage_model(timeout=5)
+    assert m.available is False  # fail-open: logged out, no fixture
+
+
+def test_dev_credits_fixture_unknown_fails_closed(monkeypatch):
+    """An unknown fixture name must never fall through to the live portal — the model
+    fails closed to available=False even when the account would otherwise be live."""
+    import agent.billing_usage as bu
+
+    monkeypatch.setenv("HERMES_DEV", "1")
+    monkeypatch.setenv("HERMES_DEV_CREDITS_FIXTURE", "not-a-real-state")
+    monkeypatch.setattr(bu, "nous_logged_in", lambda: True)
+    monkeypatch.setattr(bu, "fetch_nous_account", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("portal contacted")))
+    m = bu.build_usage_model(timeout=5)
+    assert m.available is False
+    assert m.status == "free"
+
+
+def test_dev_credits_fixture_free(monkeypatch):
+    """HERMES_DEV_CREDITS_FIXTURE=free renders the no-plan fixture state."""
+    monkeypatch.setenv("HERMES_DEV", "1")
+    monkeypatch.setenv("HERMES_DEV_CREDITS_FIXTURE", "free")
     from agent.billing_usage import build_usage_model
     m = build_usage_model(timeout=5)
-    # When the fixture is not set, the function falls through to the normal portal fetch.
-    # Since we can't guarantee a live portal, we just assert the model is built
-    # (it may be available=False if the portal is unreachable, which is fine).
-    assert m.available is not None
-
-
-def test_dev_billing_fixture_card_sub(monkeypatch):
-    """When HERMES_DEV_BILLING_FIXTURE=card-sub, build_billing_state returns a card-sub state
-    without contacting the portal."""
-    monkeypatch.setenv("HERMES_DEV_BILLING_FIXTURE", "card-sub")
-    from agent.billing_view import build_billing_state
-    b = build_billing_state(timeout=5)
-    assert b.logged_in is True
-    assert b.org_id == "org_acme"
-    assert b.org_slug == "acme"
-    assert b.org_name == "Acme Inc"
-    assert b.role == "OWNER"
-    assert b.balance_usd == Decimal("3.40")
-    assert b.card is not None
-    assert b.card.last4 == "4242"
-
-
-def test_dev_billing_fixture_notadmin(monkeypatch):
-    """When HERMES_DEV_BILLING_FIXTURE=notadmin, build_billing_state returns a non-admin role."""
-    monkeypatch.setenv("HERMES_DEV_BILLING_FIXTURE", "notadmin")
-    from agent.billing_view import build_billing_state
-    b = build_billing_state(timeout=5)
-    assert b.logged_in is True
-    assert b.role == "MEMBER"
+    assert m.available is True
+    assert m.status == "free"
+    assert m.plan_name is None
 
 
 

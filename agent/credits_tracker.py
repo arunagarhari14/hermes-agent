@@ -15,8 +15,6 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Mapping, Optional
 
-from utils import is_truthy_value
-
 logger = logging.getLogger(__name__)
 
 _version_warning_emitted: bool = False  # warn-once latch (per process)
@@ -335,20 +333,36 @@ _DEV_FIXTURES: dict[str, dict] = {
 }
 
 
+def _inert_dev_fixture_state(name: str) -> CreditsState:
+    """Field-valid CreditsState that fabricates NOTHING: all-zero balance, ``paid_access`` True
+    (no depleted notice), the unknown-name reason recorded. Stands in for an unrecognized
+    HERMES_DEV_CREDITS_FIXTURE so callers fail closed instead of falling through to live headers."""
+    return CreditsState(
+        version=1, from_header=True, captured_at=time.time(),
+        disabled_reason=f"unknown HERMES_DEV_CREDITS_FIXTURE: {name}",
+    )
+
+
 def dev_fixture_credits_state() -> Optional[CreditsState]:
-    """Fixture CreditsState for HERMES_DEV_CREDITS_FIXTURE, or None (unknown name / unset). Prod-leak guard:
-    applies ONLY when HERMES_DEV_CREDITS is also on, so a stray fixture env var never surfaces fabricated balances."""
-    name = os.environ.get("HERMES_DEV_CREDITS_FIXTURE", "").strip()
-    if not name or not is_truthy_value(os.environ.get("HERMES_DEV_CREDITS")):
+    """Fixture CreditsState for HERMES_DEV_CREDITS_FIXTURE, or None (unset / gate closed).
+
+    Prod-leak guard: applies ONLY under ``HERMES_DEV=1`` or ``HERMES_DEV_CREDITS``, so a stray
+    fixture env var never surfaces fabricated balances. An unknown name FAILS CLOSED (inert state
+    + warning) — it never falls through to the live header parser."""
+    from agent.dev_fixtures import log_unknown_fixture, read_fixture_env
+    name = read_fixture_env("HERMES_DEV_CREDITS_FIXTURE", "HERMES_DEV_CREDITS")
+    if name is None:
         return None
     if os.path.sep in name or "/" in name:  # looks like a path → read the name from the file
         try:
             with open(name, "r", encoding="utf-8") as fh:
                 name = fh.read().strip()
-        except OSError:
-            return None
+        except OSError as exc:
+            logger.warning("credits ▸ dev fixture file %r unreadable (%s) — failing closed", name, exc)
+            return _inert_dev_fixture_state(name)
     if not (spec := _DEV_FIXTURES.get(name.lower())):
-        return None
+        log_unknown_fixture("HERMES_DEV_CREDITS_FIXTURE", name)
+        return _inert_dev_fixture_state(name)
     # Stamp what the REAL parser always guarantees so a fixture is field-identical to a
     # parse_credits_headers() result: version 1 and a valid purchased_usd (zero top-up = "0.00").
     return CreditsState(**{"version": 1, "purchased_usd": "0.00", **spec}, from_header=True, captured_at=time.time())

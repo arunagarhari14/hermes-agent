@@ -334,12 +334,42 @@ def test_validate_amount_rejections(raw, err_substr):
 )
 def test_billing_fixture_card_and_gate_invariants(monkeypatch, name, has_card, is_admin, billing_on):
     """Each fixture state honors the card/admin/kill-switch contract the gate reads."""
+    monkeypatch.setenv("HERMES_DEV", "1")
     monkeypatch.setenv("HERMES_DEV_BILLING_FIXTURE", name)
     s = build_billing_state()
     assert s.logged_in is True
     assert (s.card is not None) is has_card
     assert s.is_admin is is_admin
     assert s.cli_billing_enabled is billing_on
+
+
+def test_billing_fixture_card_sub_field_contract(monkeypatch):
+    """card-sub: the card-on-subscription provenance rung plus the shared org/balance identity."""
+    monkeypatch.setenv("HERMES_DEV", "1")
+    monkeypatch.setenv("HERMES_DEV_BILLING_FIXTURE", "card-sub")
+    b = build_billing_state()
+    assert b.logged_in is True
+    assert (b.org_id, b.org_slug, b.org_name) == ("org_acme", "acme", "Acme Inc")
+    assert b.role == "OWNER"
+    assert b.balance_usd == Decimal("3.40")
+    assert b.card is not None and b.card.last4 == "4242"
+    assert b.card.resolved_via == "subPin"
+
+
+def test_billing_fixture_requires_dev_gate(monkeypatch):
+    """A stray HERMES_DEV_BILLING_FIXTURE with no HERMES_DEV must not fabricate billing state."""
+    monkeypatch.setenv("HERMES_DEV_BILLING_FIXTURE", "card")
+    s = build_billing_state()
+    assert s.logged_in is False
+
+
+def test_billing_fixture_unknown_name_fails_closed(monkeypatch):
+    """An unknown fixture name yields logged_out + a visible error, never a live portal call."""
+    monkeypatch.setenv("HERMES_DEV", "1")
+    monkeypatch.setenv("HERMES_DEV_BILLING_FIXTURE", "not-a-real-state")
+    s = build_billing_state()
+    assert s.logged_in is False
+    assert "unknown HERMES_DEV_BILLING_FIXTURE" in (s.error or "")
 
 
 
